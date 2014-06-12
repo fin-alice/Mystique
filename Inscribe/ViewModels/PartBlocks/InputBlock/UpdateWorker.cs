@@ -32,7 +32,7 @@ namespace Inscribe.ViewModels.PartBlocks.InputBlock
         private AccountInfo accountInfo;
         private string body;
         private long inReplyToId;
-        private string attachImagePath;
+        private string[] attachImagePaths;
         private string[] tags;
         public AccountInfo fallbackOriginalAccount;
 
@@ -40,7 +40,7 @@ namespace Inscribe.ViewModels.PartBlocks.InputBlock
         private bool isImageAttached;
         private bool isBodyStandby;
 
-        public TweetWorker(InputBlockViewModel parent, AccountInfo info, string body, long inReplyToId, string attachedImage, string[] tag)
+        public TweetWorker(InputBlockViewModel parent, AccountInfo info, string body, long inReplyToId, string[] attachedImages, string[] tag)
         {
             isImageAttached = false;
             isBodyStandby = false;
@@ -51,7 +51,7 @@ namespace Inscribe.ViewModels.PartBlocks.InputBlock
             this.accountInfo = info;
             this.body = body;
             this.inReplyToId = inReplyToId;
-            this.attachImagePath = attachedImage;
+            this.attachImagePaths = attachedImages;
             this.tags = tag;
         }
 
@@ -72,229 +72,241 @@ namespace Inscribe.ViewModels.PartBlocks.InputBlock
             }
         }
 
-        private bool WorkDirectMessageCore()
-        {
-            string originalBody = body; // 元の投稿文を取っておく
-            try
-            {
-                var pmatch = RegularExpressions.DirectMessageSendRegex.Match(body);
-                if (!pmatch.Success)
-                    throw new InvalidOperationException("プレチェック失敗(DM-precheck)");
-                // build text
+		private bool WorkDirectMessageCore()
+		{
+			string originalBody = body; // 元の投稿文を取っておく
+			try
+			{
+				var pmatch = RegularExpressions.DirectMessageSendRegex.Match(body);
+				if (!pmatch.Success)
+					throw new InvalidOperationException("プレチェック失敗(DM-precheck)");
+				// build text
 
-                // attach image
-                if (!String.IsNullOrEmpty(this.attachImagePath) && !isImageAttached)
-                {
-                    if (File.Exists(this.attachImagePath))
-                    {
-                        try
-                        {
-                            var upl = UploaderManager.GetSuggestedUploader();
-                            if (upl == null)
-                                throw new InvalidOperationException("画像のアップローダ―が指定されていません。");
-                            body += " " + upl.UploadImage(this.accountInfo, this.attachImagePath, this.body);
-                            isImageAttached = true;
-                        }
-                        catch (Exception e)
-                        {
-                            throw new WebException("画像のアップロードに失敗しました。", e);
-                        }
-                    }
-                    else
-                    {
-                        throw new FileNotFoundException("添付ファイルが見つかりません。");
-                    }
-                }
+				if(!this.isImageAttached)
+				{
+					foreach (var attachImagePath in this.attachImagePaths)
+					{
+						// attach image
+						if (!String.IsNullOrEmpty(attachImagePath))
+						{
+							if (File.Exists(attachImagePath))
+							{
+								try
+								{
+									var upl = UploaderManager.GetSuggestedUploader();
+									if (upl == null)
+										throw new InvalidOperationException("画像のアップローダ―が指定されていません。");
+									body += " " + upl.UploadImage(this.accountInfo, attachImagePath, this.body);
+								}
+								catch (Exception e)
+								{
+									throw new WebException("画像のアップロードに失敗しました。", e);
+								}
+							}
+							else
+							{
+								throw new FileNotFoundException("添付ファイルが見つかりません。");
+							}
+						}
+					}
+					this.isImageAttached = true;
+				}
 
-                // generate body string
-                var match = RegularExpressions.DirectMessageSendRegex.Match(body);
-                if (!match.Success)
-                    throw new InvalidOperationException("ポストアサーション失敗(DM-postcheck)");
-                String target = pmatch.Groups[1].Value;
-                body = pmatch.Groups[2].Value;
+				// generate body string
+				var match = RegularExpressions.DirectMessageSendRegex.Match(body);
+				if (!match.Success)
+					throw new InvalidOperationException("ポストアサーション失敗(DM-postcheck)");
+				String target = pmatch.Groups[1].Value;
+				body = pmatch.Groups[2].Value;
 
-                if (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
-                {
-                    if (Setting.Instance.InputExperienceProperty.TrimExceedChars)
-                    {
-                        while (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
-                        {
-                            body = body.Substring(0, body.Length - 1);
-                        }
-                    }
-                    else
-                    {
-                        throw new Exception("ツイートが140文字を超えました。");
-                    }
-                }
+				if (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
+				{
+					if (Setting.Instance.InputExperienceProperty.TrimExceedChars)
+					{
+						while (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
+						{
+							body = body.Substring(0, body.Length - 1);
+						}
+					}
+					else
+					{
+						throw new Exception("ツイートが140文字を超えました。");
+					}
+				}
 
-                this.TweetSummary = body;
+				this.TweetSummary = body;
 
-                PostOffice.UpdateDirectMessage(this.accountInfo, target, body);
+				PostOffice.UpdateDirectMessage(this.accountInfo, target, body);
 
-                this.WorkingState = InputBlock.WorkingState.Updated;
+				this.WorkingState = InputBlock.WorkingState.Updated;
 
-                return true;
-            }
-            catch (Exception ex)
-            {
-                body = originalBody; // 元に戻しておく
-                this.TweetSummary = originalBody;
-                this.WorkingState = ex is TweetAnnotationException ? InputBlock.WorkingState.Annotated : InputBlock.WorkingState.Failed;
-                this.ExceptionString = ex.ToString();
-                ParseFailException(ex);
-                this.RecentPostCount = -1;
-                return this.WorkingState == InputBlock.WorkingState.Annotated;
-            }
-        }
+				return true;
+			}
+			catch (Exception ex)
+			{
+				body = originalBody; // 元に戻しておく
+				this.TweetSummary = originalBody;
+				this.WorkingState = ex is TweetAnnotationException ? InputBlock.WorkingState.Annotated : InputBlock.WorkingState.Failed;
+				this.ExceptionString = ex.ToString();
+				ParseFailException(ex);
+				this.RecentPostCount = -1;
+				return this.WorkingState == InputBlock.WorkingState.Annotated;
+			}
+		}
 
-        private bool WorkCore()
-        {
-            try
-            {
-                try
-                {
-                    // build text
+		private bool WorkCore()
+		{
+			try
+			{
+				try
+				{
+					// build text
 
-                    // attach image
-                    if (!String.IsNullOrEmpty(this.attachImagePath) && !isImageAttached)
-                    {
-                        if (File.Exists(this.attachImagePath))
-                        {
-                            try
-                            {
-                                var upl = UploaderManager.GetSuggestedUploader();
-                                if (upl == null)
-                                    throw new InvalidOperationException("画像のアップローダ―が指定されていません。");
-                                var delgupl = upl as IPostDelegatingUploader;
-                                if (delgupl != null)
-                                {
-                                    // delegating upload
-                                    delgupl.PostAndUpload(this.accountInfo, this.attachImagePath, this.body,
-                                                          this.inReplyToId);
-                                    this.WorkingState = InputBlock.WorkingState.Updated;
-                                    return true;
-                                }
-                                body += " " + upl.UploadImage(this.accountInfo, this.attachImagePath, this.body);
-                                isImageAttached = true;
-                            }
-                            catch (Exception e)
-                            {
-                                throw new WebException("画像のアップロードに失敗しました。", e);
-                            }
-                        }
-                        else
-                        {
-                            throw new FileNotFoundException("添付ファイルが見つかりません。");
-                        }
-                    }
+					if(!this.isImageAttached)
+					{
+						foreach(var attachImagePath in this.attachImagePaths)
+						{
+							// attach image
+							if(!String.IsNullOrEmpty(attachImagePath))
+							{
+								if(File.Exists(attachImagePath))
+								{
+									try
+									{
+										var upl = UploaderManager.GetSuggestedUploader();
+										if(upl == null)
+											throw new InvalidOperationException("画像のアップローダ―が指定されていません。");
+										var delgupl = upl as IPostDelegatingUploader;
+										if(delgupl != null)
+										{
+											// delegating upload
+											delgupl.PostAndUpload(this.accountInfo, attachImagePath, this.body,
+																  this.inReplyToId);
+											this.WorkingState = InputBlock.WorkingState.Updated;
+											return true;
+										}
+										body += " " + upl.UploadImage(this.accountInfo, attachImagePath, this.body);
+										isImageAttached = true;
+									}
+									catch(Exception e)
+									{
+										throw new WebException("画像のアップロードに失敗しました。", e);
+									}
+								}
+								else
+								{
+									throw new FileNotFoundException("添付ファイルが見つかりません。");
+								}
+							}
+						}
+					}
 
-                    // trimming space and line feeding
-                    body = body.TrimStart(TwitterDefine.TrimmingChars).TrimEnd(TwitterDefine.TrimmingChars);
+					// trimming space and line feeding
+					body = body.TrimStart(TwitterDefine.TrimmingChars).TrimEnd(TwitterDefine.TrimmingChars);
 
-                    if (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
-                    {
-                        if (Setting.Instance.InputExperienceProperty.TrimExceedChars)
-                        {
-                            while (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
-                            {
-                                body = body.Substring(0, body.Length - 1);
-                            }
-                        }
-                        else
-                        {
-                            throw new Exception("ツイートが140文字を超えました。");
-                        }
-                    }
-
-
-                    if (!isBodyStandby)
-                    {
-                        // is Unoffocial RT
-                        bool isQuoting = false;
-                        string quoteBody = String.Empty;
-                        // split "unofficial RT"
-                        var quoteindex = -1;
-
-                        var rtidx = body.IndexOf("RT @");
-                        if (rtidx >= 0)
-                            quoteindex = rtidx;
-
-                        var qtidx = body.IndexOf("QT @");
-                        if (qtidx >= 0 && (quoteindex == -1 || qtidx < quoteindex))
-                            quoteindex = qtidx;
-
-                        if (quoteindex >= 0)
-                        {
-                            isQuoting = true;
-                            quoteBody = " " + body.Substring(quoteindex).Trim();
-                            body = body.Substring(0, quoteindex);
-                        }
-                        body = body.TrimEnd(' ', '\t');
-
-                        // add footer (when is in not "unofficial RT")
-                        if (!isQuoting &&
-                            !String.IsNullOrEmpty(accountInfo.AccountProperty.FooterString) &&
-                            TweetTextCounter.Count(body) + TweetTextCounter.Count(accountInfo.AccountProperty.FooterString) + 1 <= TwitterDefine.TweetMaxLength)
-                            body += " " + accountInfo.AccountProperty.FooterString;
+					if (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
+					{
+						if (Setting.Instance.InputExperienceProperty.TrimExceedChars)
+						{
+							while (TweetTextCounter.Count(body) > TwitterDefine.TweetMaxLength)
+							{
+								body = body.Substring(0, body.Length - 1);
+							}
+						}
+						else
+						{
+							throw new Exception("ツイートが140文字を超えました。");
+						}
+					}
 
 
-                        // bind tag
-                        if (tags != null && this.tags.Any())
-                        {
-                            foreach (var tag in tags.Select(t => t.StartsWith("#") ? t : "#" + t))
-                            {
-                                if (TweetTextCounter.Count(body) + TweetTextCounter.Count(quoteBody) + tag.Length + 1 <= TwitterDefine.TweetMaxLength)
-                                    body += " " + tag;
-                            }
-                        }
+					if (!isBodyStandby)
+					{
+						// is Unoffocial RT
+						bool isQuoting = false;
+						string quoteBody = String.Empty;
+						// split "unofficial RT"
+						var quoteindex = -1;
 
-                        // join quote
-                        body += quoteBody;
-                        isBodyStandby = true;
-                    }
-                    // uniquify body
-                    if (Setting.Instance.InputExperienceProperty.AutoUniquify)
-                        body = Uniquify(body);
-                    this.TweetSummary = "@" + this.accountInfo.ScreenName + ": " + body;
+						var rtidx = body.IndexOf("RT @");
+						if (rtidx >= 0)
+							quoteindex = rtidx;
 
-                    // ready
+						var qtidx = body.IndexOf("QT @");
+						if (qtidx >= 0 && (quoteindex == -1 || qtidx < quoteindex))
+							quoteindex = qtidx;
 
-                    if (this.inReplyToId != 0)
-                        this.RecentPostCount = PostOffice.UpdateTweet(this.accountInfo, body, this.inReplyToId);
-                    else
-                        this.RecentPostCount = PostOffice.UpdateTweet(this.accountInfo, body);
+						if (quoteindex >= 0)
+						{
+							isQuoting = true;
+							quoteBody = " " + body.Substring(quoteindex).Trim();
+							body = body.Substring(0, quoteindex);
+						}
+						body = body.TrimEnd(' ', '\t');
 
-                    this.WorkingState = InputBlock.WorkingState.Updated;
+						// add footer (when is in not "unofficial RT")
+						if (!isQuoting &&
+							!String.IsNullOrEmpty(accountInfo.AccountProperty.FooterString) &&
+							TweetTextCounter.Count(body) + TweetTextCounter.Count(accountInfo.AccountProperty.FooterString) + 1 <= TwitterDefine.TweetMaxLength)
+							body += " " + accountInfo.AccountProperty.FooterString;
 
-                    return true;
-                }
-                catch (TweetFailedException tfex)
-                {
-                    var acc = AccountStorage.Get(this.accountInfo.AccountProperty.FallbackAccount);
-                    if (tfex.ErrorKind != TweetFailedException.TweetErrorKind.Controlled ||
-                        acc == null)
-                    {
-                        throw;
-                    }
-                    else
-                    {
-                        // fallbacking
-                        // 画像のattachやタグのbindはもう必要ない
-                        FallbackRequired(new TweetWorker(this.parent, acc, body, this.inReplyToId, null, null));
-                        throw new TweetAnnotationException(TweetAnnotationException.AnnotationKind.Fallbacked);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                this.WorkingState = ex is TweetAnnotationException ? InputBlock.WorkingState.Annotated : InputBlock.WorkingState.Failed;
-                this.ExceptionString = ex.ToString();
-                ParseFailException(ex);
-                this.RecentPostCount = -1;
-                return this.WorkingState == InputBlock.WorkingState.Annotated;
-            }
-        }
+
+						// bind tag
+						if (tags != null && this.tags.Any())
+						{
+							foreach (var tag in tags.Select(t => t.StartsWith("#") ? t : "#" + t))
+							{
+								if (TweetTextCounter.Count(body) + TweetTextCounter.Count(quoteBody) + tag.Length + 1 <= TwitterDefine.TweetMaxLength)
+									body += " " + tag;
+							}
+						}
+
+						// join quote
+						body += quoteBody;
+						isBodyStandby = true;
+					}
+					// uniquify body
+					if (Setting.Instance.InputExperienceProperty.AutoUniquify)
+						body = Uniquify(body);
+					this.TweetSummary = "@" + this.accountInfo.ScreenName + ": " + body;
+
+					// ready
+
+					if (this.inReplyToId != 0)
+						this.RecentPostCount = PostOffice.UpdateTweet(this.accountInfo, body, this.inReplyToId);
+					else
+						this.RecentPostCount = PostOffice.UpdateTweet(this.accountInfo, body);
+
+					this.WorkingState = InputBlock.WorkingState.Updated;
+
+					return true;
+				}
+				catch (TweetFailedException tfex)
+				{
+					var acc = AccountStorage.Get(this.accountInfo.AccountProperty.FallbackAccount);
+					if (tfex.ErrorKind != TweetFailedException.TweetErrorKind.Controlled ||
+						acc == null)
+					{
+						throw;
+					}
+					else
+					{
+						// fallbacking
+						// 画像のattachやタグのbindはもう必要ない
+						FallbackRequired(new TweetWorker(this.parent, acc, body, this.inReplyToId, null, null));
+						throw new TweetAnnotationException(TweetAnnotationException.AnnotationKind.Fallbacked);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				this.WorkingState = ex is TweetAnnotationException ? InputBlock.WorkingState.Annotated : InputBlock.WorkingState.Failed;
+				this.ExceptionString = ex.ToString();
+				ParseFailException(ex);
+				this.RecentPostCount = -1;
+				return this.WorkingState == InputBlock.WorkingState.Annotated;
+			}
+		}
 
         private string Uniquify(String body)
         {
