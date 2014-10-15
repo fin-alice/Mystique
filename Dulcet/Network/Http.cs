@@ -46,7 +46,7 @@ namespace Dulcet.Network
         static Http()
         {
             // Windows 8.1 Preview
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Ssl3;
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls;
         }
 
         #region Converter delegate definitions and common converters
